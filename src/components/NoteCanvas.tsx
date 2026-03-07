@@ -135,7 +135,7 @@ export const NoteCanvas: React.FC<NoteCanvasProps> = ({ onClose }) => {
             {/* Close Button */}
             <button
                 onClick={onClose}
-                className="absolute top-2 right-2 px-2 py-1 bg-red-500 text-white rounded"
+                className="absolute top-2 right-2 px-2 py-1 bg-red-500 cursor-pointer text-white rounded"
             >
                 <X className="h-5 w-5" />
             </button>

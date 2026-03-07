@@ -18,5 +18,4 @@ export const privateRoutes = [
         path: routes.quizProgress,
         component: QuizProgressPage,
     }
-
 ];

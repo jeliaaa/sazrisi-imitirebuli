@@ -1,9 +1,10 @@
-import { MoveDiagonal2 } from "lucide-react";
-import { type SetStateAction, type Dispatch, useState, useReducer, useRef, useEffect, useCallback } from "react";
+import { MoveDiagonal2, X } from "lucide-react";
+import { type SetStateAction, type Dispatch, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import type { IAttempt, Question, QuestionWithAnswers } from "../types/types";
 import { useStartAttemptStore } from "../stores/attemptStore";
 import { Link } from "react-router-dom";
 import Loader from "./reusables/Loader";
+import { RingLoader } from "react-spinners";
 
 interface AnswerModalProps {
     isOpen: boolean;
@@ -13,77 +14,71 @@ interface AnswerModalProps {
     questions: Question[] | QuestionWithAnswers[] | [];
 }
 
-// ─── Reducer ─────────────────────────────────────────────────────────────────
+const GEO = ["ა", "ბ", "გ", "დ"];
+const KEYS = ["a", "b", "g", "d"];
 
-interface QuizState {
-    currentQuestionIndex: number;
-    submittedQuestions: Set<number>;
-    elapsedTimes: Map<number, number>;
-    answersNoTime: (string | null)[];
-    answersTimed: (string | null)[];
-}
+// ─── localStorage helpers ─────────────────────────────────────────────────────
+const storageKey = (attemptId: string | number, mode: "no-time" | "timed") =>
+    `answer_modal_${attemptId}_${mode}`;
 
-type QuizAction =
-    | { type: "RESET"; total: number }
-    | { type: "SET_INDEX"; payload: number }
-    | { type: "SET_ANSWER_NO_TIME"; payload: (string | null)[] }
-    | { type: "SET_ANSWER_TIMED"; payload: (string | null)[] }
-    | { type: "ADD_SUBMITTED"; payload: Set<number> }
-    | { type: "SET_ELAPSED"; payload: Map<number, number> };
-
-function buildInitial(total: number): QuizState {
-    return {
-        currentQuestionIndex: 0,
-        submittedQuestions: new Set<number>(),
-        elapsedTimes: new Map<number, number>(),
-        answersNoTime: Array(total).fill(null),
-        answersTimed: Array(total).fill(null),
-    };
-}
-
-function quizReducer(state: QuizState, action: QuizAction): QuizState {
-    switch (action.type) {
-        case "RESET":
-            return buildInitial(action.total);
-        case "SET_INDEX":
-            return { ...state, currentQuestionIndex: action.payload };
-        case "SET_ANSWER_NO_TIME":
-            return { ...state, answersNoTime: action.payload };
-        case "SET_ANSWER_TIMED":
-            return { ...state, answersTimed: action.payload };
-        case "ADD_SUBMITTED":
-            return { ...state, submittedQuestions: action.payload };
-        case "SET_ELAPSED":
-            return { ...state, elapsedTimes: action.payload };
-        default:
-            return state;
+const loadAnswers = (attemptId: string | number | undefined, mode: "no-time" | "timed", size: number): (string | null)[] => {
+    if (!attemptId) return Array(size).fill(null);
+    try {
+        const raw = localStorage.getItem(storageKey(attemptId, mode));
+        if (!raw) return Array(size).fill(null);
+        const parsed = JSON.parse(raw) as (string | null)[];
+        if (parsed.length !== size) return Array(size).fill(null);
+        return parsed;
+    } catch {
+        return Array(size).fill(null);
     }
-}
+};
 
-// ─── Component ───────────────────────────────────────────────────────────────
+const saveAnswers = (attemptId: string | number | undefined, mode: "no-time" | "timed", answers: (string | null)[]) => {
+    if (!attemptId) return;
+    try {
+        localStorage.setItem(storageKey(attemptId, mode), JSON.stringify(answers));
+    } catch { /* fail silently */ }
+};
 
-const AnswerModal = ({
-    isOpen,
-    setIsOpen,
-    isTraining,
-    attempt,
-    questions,
-}: AnswerModalProps) => {
-    const { answerLoading, answerQuestion } = useStartAttemptStore();
+const clearAnswers = (attemptId: string | number | undefined) => {
+    if (!attemptId) return;
+    localStorage.removeItem(storageKey(attemptId, "no-time"));
+    localStorage.removeItem(storageKey(attemptId, "timed"));
+};
+// ─────────────────────────────────────────────────────────────────────────────
 
-    const activeTab = isTraining ? "no-time" : "timed";
+const AnswerModal = ({ isOpen, setIsOpen, isTraining, attempt, questions }: AnswerModalProps) => {
+    const activeTab = useMemo(() => isTraining ? "no-time" : "timed", [isTraining]);
+    // Read-only mode: every question already has a submitted answer
+    const isReadOnly = useMemo(() =>
+        attempt?.status === 'completed'
+        , [attempt?.status]);
 
-    const [quizState, dispatch] = useReducer(
-        quizReducer,
-        buildInitial(attempt?.total_questions ?? 0)
+    // In read-only mode derive answers directly from question data
+    const readOnlyAnswers = useMemo<(string | null)[]>(() => {
+        if (!isReadOnly) return [];
+        return questions.map(q =>
+            ('user_answer' in q ? q.user_answer?.selected_answer ?? null : null)
+        );
+    }, [isReadOnly, questions]);
+
+    const [answersNoTime, setAnswersNoTime] = useState<(string | null)[]>(() =>
+        loadAnswers(attempt?.id, "no-time", questions.length || 0)
+    );
+    const [answersTimed, setAnswersTimed] = useState<(string | null)[]>(() =>
+        loadAnswers(attempt?.id, "timed", questions.length || 0)
     );
 
-    const { currentQuestionIndex, submittedQuestions, elapsedTimes, answersNoTime, answersTimed } = quizState;
+    const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+    const [questionStartTime, setQuestionStartTime] = useState<number | null>(null);
+    const [elapsedTimes, setElapsedTimes] = useState<Map<number, number>>(new Map());
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
-    const questionStartTime = useRef<number | null>(null);
+    const { answerLoading, answerQuestion, submitAttempt } = useStartAttemptStore();
 
     const [position, setPosition] = useState({ x: 100, y: 100 });
-    const [size, setSize] = useState({ width: 600, height: 600 });
+    const [size, setSize] = useState({ width: 760, height: 540 });
     const [isDragging, setIsDragging] = useState(false);
     const [isResizing, setIsResizing] = useState(false);
 
@@ -91,42 +86,49 @@ const AnswerModal = ({
     const resizeStart = useRef<{ mouseX: number; mouseY: number; width: number; height: number } | null>(null);
     const modalRef = useRef<HTMLDivElement>(null);
 
-    const currentQuestion = questions[currentQuestionIndex] ?? null;
+    const currentQuestion = useMemo(() => questions[currentQuestionIndex] || null, [questions, currentQuestionIndex]);
 
-    const isQuestionAnswered =
-        !!currentQuestion &&
-        "user_answer" in currentQuestion &&
-        !!currentQuestion.user_answer?.selected_answer;
-
-    const allAnswered =
-        questions.length > 0 &&
-        questions.every((q) => "user_answer" in q && q.user_answer?.selected_answer);
-
-    // Reset all state when attempt changes — single dispatch, no cascading renders
     useEffect(() => {
-        dispatch({ type: "RESET", total: attempt?.total_questions ?? 0 });
-        if (!isTraining && isOpen) {
-            questionStartTime.current = Date.now();
-        }
-    }, [attempt?.id, attempt?.total_questions, isTraining, isOpen]);
+        if (!attempt?.total_questions) return;
+        const sz = attempt.total_questions;
+        setAnswersNoTime(loadAnswers(attempt.id, "no-time", sz));
+        setAnswersTimed(loadAnswers(attempt.id, "timed", sz));
+    }, [attempt?.id, attempt?.total_questions]);
 
+    useEffect(() => {
+        if (attempt && !isTraining && isOpen) setQuestionStartTime(Date.now());
+    }, [attempt, isTraining, isOpen]);
+
+    useEffect(() => {
+        if (questions.length > 0) setCurrentQuestionIndex(0);
+    }, [questions]);
+
+    useEffect(() => {
+        if (!isReadOnly) saveAnswers(attempt?.id, "no-time", answersNoTime);
+    }, [answersNoTime, attempt?.id, isReadOnly]);
+
+    useEffect(() => {
+        if (!isReadOnly) saveAnswers(attempt?.id, "timed", answersTimed);
+    }, [answersTimed, attempt?.id, isReadOnly]);
+
+    // ─── Drag / resize ────────────────────────────────────────────────────────
     const handleMouseMove = useCallback((e: MouseEvent) => {
         if (isDragging && dragStart.current) {
             const dx = e.clientX - dragStart.current.mouseX;
             const dy = e.clientY - dragStart.current.mouseY;
             setPosition({
-                x: Math.max(0, dragStart.current.divX + dx),
-                y: Math.max(0, dragStart.current.divY + dy),
+                x: Math.min(Math.max(0, dragStart.current.divX + dx), window.innerWidth - size.width),
+                y: Math.min(Math.max(0, dragStart.current.divY + dy), window.innerHeight - size.height),
             });
         } else if (isResizing && resizeStart.current) {
             const dx = e.clientX - resizeStart.current.mouseX;
             const dy = e.clientY - resizeStart.current.mouseY;
             setSize({
-                width: Math.max(300, resizeStart.current.width + dx),
-                height: Math.max(200, resizeStart.current.height + dy),
+                width: Math.min(Math.max(320, resizeStart.current.width + dx), window.innerWidth - position.x),
+                height: Math.min(Math.max(240, resizeStart.current.height + dy), window.innerHeight - position.y),
             });
         }
-    }, [isDragging, isResizing]);
+    }, [isDragging, isResizing, position.x, position.y, size.width, size.height]);
 
     const handleMouseUp = useCallback(() => {
         setIsDragging(false);
@@ -159,297 +161,363 @@ const AnswerModal = ({
         setIsResizing(true);
     }, [size]);
 
+    // ─── Question navigation ──────────────────────────────────────────────────
     const handleQuestionSwitch = useCallback((newIndex: number) => {
         if (newIndex < 0 || newIndex >= questions.length) return;
-
-        if (questionStartTime.current !== null && currentQuestion && !isQuestionAnswered) {
-            const timeSpent = Math.floor((Date.now() - questionStartTime.current) / 1000);
-            const updated = new Map(elapsedTimes);
-            updated.set(currentQuestion.order, (updated.get(currentQuestion.order) || 0) + timeSpent);
-            dispatch({ type: "SET_ELAPSED", payload: updated });
+        if (questionStartTime !== null && currentQuestion) {
+            const timeSpent = Math.floor((Date.now() - questionStartTime) / 1000);
+            setElapsedTimes(prev => {
+                const u = new Map(prev);
+                u.set(currentQuestion.order, (u.get(currentQuestion.order) || 0) + timeSpent);
+                return u;
+            });
         }
+        setCurrentQuestionIndex(newIndex);
+        setQuestionStartTime(Date.now());
+    }, [questions, questionStartTime, currentQuestion]);
 
-        dispatch({ type: "SET_INDEX", payload: newIndex });
-
-        const newQuestion = questions[newIndex];
-        const hasSelectedAnswer = newQuestion && "user_answer" in newQuestion && newQuestion.user_answer?.selected_answer;
-
-        if (newQuestion && !hasSelectedAnswer && !submittedQuestions.has(newQuestion.order)) {
-            questionStartTime.current = Date.now();
-        } else {
-            questionStartTime.current = null;
-        }
-    }, [questions, currentQuestion, submittedQuestions, elapsedTimes, isQuestionAnswered]);
-
+    // ─── Answer handlers (no-op in read-only mode) ────────────────────────────
     const handleNoTimeAnswer = useCallback((questionIndex: number, choice: string) => {
-        const updated = [...answersNoTime];
-        updated[questionIndex] = choice;
-        dispatch({ type: "SET_ANSWER_NO_TIME", payload: updated });
-    }, [answersNoTime]);
+        setAnswersNoTime(prev => {
+            const u = [...prev];
+            u[questionIndex] = u[questionIndex] === choice ? null : choice;
+            return u;
+        });
+    }, []);
 
-    const handleTimedAnswer = useCallback((choice: string) => {
-        if (!currentQuestion || isQuestionAnswered) return;
-        const updated = [...answersTimed];
-        updated[currentQuestion.order] = choice;
-        dispatch({ type: "SET_ANSWER_TIMED", payload: updated });
-    }, [currentQuestion, isQuestionAnswered, answersTimed]);
+    const handleTimedAnswer = useCallback((questionIndex: number, choice: string) => {
+        setAnswersTimed(prev => {
+            const u = [...prev];
+            u[questionIndex] = u[questionIndex] === choice ? null : choice;
+            return u;
+        });
+    }, []);
 
-    const handleTimedComplete = useCallback(async () => {
-        if (!currentQuestion || !attempt || isQuestionAnswered) return;
-
-        const selectedAnswer = answersTimed[currentQuestion.order];
-        if (!selectedAnswer) {
-            alert("Please select an answer before completing.");
-            return;
-        }
-
-        if (submittedQuestions.has(currentQuestion.order)) {
-            alert("You have already completed this question.");
-            return;
-        }
-
-        const timeSpentNow = questionStartTime.current
-            ? Math.floor((Date.now() - questionStartTime.current) / 1000)
-            : 0;
-        const totalTime = (elapsedTimes.get(currentQuestion.order) || 0) + timeSpentNow;
-
+    // ─── Submit all ───────────────────────────────────────────────────────────
+    const handleSubmitAll = useCallback(async (answers: (string | null)[], mode: "no-time" | "timed") => {
+        if (!attempt) return;
+        setIsSubmitting(true);
         try {
-            await answerQuestion(attempt.id.toString(), {
-                question_id: currentQuestion.id,
-                selected_answer: selectedAnswer,
-                time_taken: totalTime,
-            });
-
-            const newSubmitted = new Set(submittedQuestions).add(currentQuestion.order);
-            dispatch({ type: "ADD_SUBMITTED", payload: newSubmitted });
-
-            const newElapsed = new Map(elapsedTimes);
-            newElapsed.set(currentQuestion.order, totalTime);
-            dispatch({ type: "SET_ELAPSED", payload: newElapsed });
-
-            questionStartTime.current = null;
-
-            const nextUnansweredIndex = questions.findIndex((q, index) => {
-                const hasSelectedAnswer = "user_answer" in q && q.user_answer?.selected_answer;
-                return index > currentQuestionIndex && !hasSelectedAnswer && !newSubmitted.has(q.order);
-            });
-
-            if (nextUnansweredIndex !== -1) {
-                handleQuestionSwitch(nextUnansweredIndex);
+            for (let i = 0; i < questions.length; i++) {
+                const q = questions[i];
+                const answer = answers[i];
+                if (!answer) continue;
+                const timeSpent = mode === "timed" ? (elapsedTimes.get(q.order) || 0) : 0;
+                await answerQuestion(attempt.code, {
+                    question_id: q.id,
+                    selected_answer: answer,
+                    time_taken: timeSpent,
+                });
             }
-        } catch (error) {
-            console.error("Failed to submit answer:", error);
-            alert("Failed to submit answer. Please try again.");
+            clearAnswers(attempt.id);
+            submitAttempt(attempt.code)
+            window.location.reload();
+        } catch (err) {
+            console.error("Submit failed:", err);
+        } finally {
+            setIsSubmitting(false);
         }
-    }, [currentQuestion, attempt, answersTimed, submittedQuestions, elapsedTimes, answerQuestion, questions, currentQuestionIndex, handleQuestionSwitch, isQuestionAnswered]);
-
-    const handleSkip = useCallback(() => {
-        if (!currentQuestion || isQuestionAnswered) return;
-
-        if (questionStartTime.current !== null) {
-            const timeSpent = Math.floor((Date.now() - questionStartTime.current) / 1000);
-            const updated = new Map(elapsedTimes);
-            updated.set(currentQuestion.order, (updated.get(currentQuestion.order) || 0) + timeSpent);
-            dispatch({ type: "SET_ELAPSED", payload: updated });
-            questionStartTime.current = null;
-        }
-
-        const nextIndex = currentQuestionIndex + 1;
-        if (nextIndex < questions.length) {
-            handleQuestionSwitch(nextIndex);
-        }
-    }, [currentQuestion, currentQuestionIndex, questions.length, handleQuestionSwitch, isQuestionAnswered, elapsedTimes]);
+    }, [attempt, questions, elapsedTimes, answerQuestion, submitAttempt]);
 
     const stopPropagation = useCallback((e: React.MouseEvent) => e.stopPropagation(), []);
 
+    const noTimeAnsweredCount = useMemo(() => answersNoTime.filter(Boolean).length, [answersNoTime]);
+    const timedAnsweredCount = useMemo(() => answersTimed.filter(Boolean).length, [answersTimed]);
+
     if (!isOpen) return null;
+
+    const isMobile = typeof window !== "undefined" && window.innerWidth < 1024;
+    const loading = answerLoading || isSubmitting;
+
+    // ─── Answer grid ──────────────────────────────────────────────────────────
+    const renderAnswerGrid = (
+        answers: (string | null)[],
+        onAnswer: (qIndex: number, choice: string) => void,
+        activeColIndex?: number
+    ) => (
+        <table className="border-separate" style={{ borderSpacing: "5px" }}>
+            <tbody>
+                {/* Row 0: question number badges */}
+                <tr>
+                    <td className="w-6" />
+                    {questions.map((q, i) => {
+                        const isAnswered = !!answers[i];
+                        // const isCurrent = activeColIndex === i;
+
+                        return (
+                            <td key={q.id} className="text-center p-0">
+                                <button
+                                    className={`inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold transition-all duration-200 focus:outline-none
+                                        ${isAnswered
+                                            ? "bg-main-color text-white shadow-sm"
+                                            : "bg-gray-100 text-gray-500 hover:bg-gray-200"}
+                                                `}
+                                    onClick={() => activeColIndex !== undefined && handleQuestionSwitch(i)}
+                                    onMouseDown={stopPropagation}
+                                    title={`კითხვა ${q.order}`}
+                                    // In read-only mode the badges are not interactive for switching
+                                    disabled={isReadOnly && activeColIndex === undefined}
+                                >
+                                    {q.order}
+                                </button>
+                            </td>
+                        );
+                    })}
+                </tr>
+
+                {/* Rows 1–4: one row per choice */}
+                {KEYS.map((choiceKey, choiceIndex) => (
+                    <tr key={choiceKey}>
+                        <td className="text-center pr-1">
+                            <span className="text-xs font-bold text-gray-400 select-none">
+                                {GEO[choiceIndex]}
+                            </span>
+                        </td>
+                        {questions.map((q, i) => {
+                            const isSelected = answers[i] === choiceKey;
+                            const isCurrent = activeColIndex === i;
+                            return (
+                                <td key={q.id} className="text-center p-0">
+                                    <button
+                                        onClick={() => !isReadOnly && onAnswer(i, choiceKey)}
+                                        onMouseDown={stopPropagation}
+                                        disabled={isReadOnly}
+                                        className={`w-7 h-7 rounded-md border text-xs font-semibold transition-all duration-150 focus:outline-none
+                                            ${isReadOnly
+                                                ? isSelected
+                                                    // read-only selected: solid, no hover effects
+                                                    ? "bg-main-color border-main-color text-white cursor-default"
+                                                    : "border-gray-100 text-gray-200 cursor-default bg-white"
+                                                : isSelected
+                                                    ? "bg-blue-400 border-blue-400 text-white shadow shadow-blue-200 scale-105"
+                                                    : isCurrent
+                                                        ? "border-blue-200 text-gray-300 hover:border-blue-400 hover:bg-blue-50 hover:text-blue-500"
+                                                        : "border-gray-200 text-gray-300 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-400"
+                                            }`}
+                                        title={`კითხვა ${q.order} — ${GEO[choiceIndex]}`}
+                                    >
+                                        {isSelected ? GEO[choiceIndex] : "·"}
+                                    </button>
+                                </td>
+                            );
+                        })}
+                    </tr>
+                ))}
+            </tbody>
+        </table>
+    );
+
+    // ─── Read-only footer ─────────────────────────────────────────────────────
+    const renderReadOnlyFooter = () => {
+        const answeredCount = readOnlyAnswers.filter(Boolean).length;
+        return (
+            <div className="shrink-0 border-t bg-gray-50 px-4 py-3 flex items-center justify-between gap-3 select-none">
+                <div className="flex items-center gap-3 text-xs">
+                    <span className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-main-color inline-block" />
+                        <span className="text-gray-600 font-medium">{answeredCount} შესრულებული</span>
+                    </span>
+                    <span className="text-gray-300">|</span>
+                    <span className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-gray-300 inline-block" />
+                        <span className="text-gray-500">{questions.length - answeredCount} გამოტოვებული</span>
+                    </span>
+                </div>
+
+                <div className="flex flex-wrap gap-0.75 max-w-40">
+                    {readOnlyAnswers.map((a, i) => (
+                        <span
+                            key={i}
+                            title={`კითხვა ${i + 1}${a ? ` — ${a.toUpperCase()}` : " — გამოტოვებული"}`}
+                            className={`inline-block w-2 h-2 rounded-full transition-colors duration-200 ${a ? "bg-main-color" : "bg-gray-200"}`}
+                        />
+                    ))}
+                </div>
+
+                <Link
+                    onClick={() =>{localStorage.removeItem('attemptId')} }
+                    to={`/`}
+                    onMouseDown={stopPropagation}
+                    className="px-5 py-2 rounded-lg text-sm font-semibold bg-main-color text-white hover:bg-emerald-600 shadow-sm shadow-emerald-200 transition-all duration-150 active:scale-95"
+                >
+                    შედეგი →
+                </Link>
+            </div>
+        );
+    };
+
+    // ─── Editable footer ──────────────────────────────────────────────────────
+    const renderFooter = (
+        answeredCount: number,
+        total: number,
+        answers: (string | null)[],
+        onSubmit: () => void,
+        extra?: React.ReactNode
+    ) => (
+        <div className="shrink-0 border-t bg-gray-50 px-4 py-3 flex items-center justify-between gap-3 select-none">
+            <div className="flex items-center gap-3 text-xs">
+                <span className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-main-color inline-block" />
+                    <span className="text-gray-600 font-medium">{answeredCount} შესრულებული</span>
+                </span>
+                <span className="text-gray-300">|</span>
+                <span className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-gray-300 inline-block" />
+                    <span className="text-gray-500">{total - answeredCount} დარჩენილი</span>
+                </span>
+            </div>
+
+            <div className="flex flex-wrap gap-0.75 max-w-40">
+                {Array.from({ length: total }, (_, i) => (
+                    <span
+                        key={i}
+                        title={`კითხვა ${i + 1}${answers[i] ? ` — ${answers[i]!.toUpperCase()}` : " — გამოტოვებული"}`}
+                        className={`inline-block w-2 h-2 rounded-full transition-colors duration-200 ${answers[i] ? "bg-main-color" : "bg-gray-200"}`}
+                    />
+                ))}
+            </div>
+
+            {extra}
+
+            <button
+                onClick={onSubmit}
+                onMouseDown={stopPropagation}
+                disabled={loading || answeredCount === 0}
+                className={`px-5 py-2 rounded-lg text-sm font-semibold transition-all duration-150 active:scale-95
+                    ${answeredCount === total
+                        ? "bg-main-color text-white hover:bg-emerald-600 shadow-sm shadow-emerald-200"
+                        : answeredCount > 0
+                            ? "bg-blue-500 text-white hover:bg-blue-600 shadow-sm shadow-blue-200"
+                            : "bg-gray-100 text-gray-400 cursor-not-allowed"
+                    }`}
+            >
+                {loading ? <RingLoader size={20} color="white" /> : `გაგზავნა${answeredCount > 0 ? ` (${answeredCount})` : ""}`}
+            </button>
+        </div>
+    );
 
     return (
         <>
             <div
-                className="fixed inset-0 bg-black/10 bg-opacity-40 z-200"
+                className="fixed inset-0 bg-black/20 z-200"
                 onClick={() => setIsOpen(false)}
             />
 
-            {answerLoading ? <Loader /> :
+            {loading && !isSubmitting ? <Loader /> :
                 <div
                     ref={modalRef}
-                    className={`z-300 fixed bg-white p-4 overflow-auto shadow-lg rounded-md 
-                        ${window.innerWidth < 1024 ? "left-1/2 -translate-x-1/2 bottom-0 cursor-default" : "cursor-move"}`}
+                    className={`z-300 fixed bg-white shadow-xl flex flex-col overflow-hidden
+                        ${isMobile ? "left-0 right-0 bottom-0 rounded-t-xl" : "rounded-xl cursor-move"}`}
                     style={{
-                        top: window.innerWidth < 1024 ? "auto" : position.y,
-                        left: window.innerWidth < 1024 ? "50%" : position.x,
-                        width: window.innerWidth < 1024 ? "100%" : size.width,
-                        height: window.innerWidth < 1024 ? "60%" : size.height,
+                        top: isMobile ? "auto" : position.y,
+                        left: isMobile ? 0 : position.x,
+                        width: isMobile ? "100%" : size.width,
+                        height: isMobile ? "75vh" : size.height,
                         userSelect: isDragging || isResizing ? "none" : "auto",
                     }}
                     onMouseDown={handleMouseDown}
                     onClick={stopPropagation}
                 >
-                    <button
-                        onClick={() => setIsOpen(false)}
-                        className="absolute top-2 right-2 text-xl font-bold cursor-pointer z-10 hover:text-red-500"
-                        aria-label="Close Modal"
-                        onMouseDown={stopPropagation}
-                    >
-                        ×
-                    </button>
-
-                    <div className="flex flex-wrap gap-4 mb-4 justify-center select-none">
-                        <h2 className="text-lg font-semibold">პასუხების ფურცელი</h2>
+                    {/* Title bar */}
+                    <div className="flex items-center justify-between px-4 py-3 border-b bg-gray-50 shrink-0 select-none">
+                        <div className="flex items-center gap-2">
+                            {!isMobile && (
+                                <div
+                                    data-resize-handle="true"
+                                    onMouseDown={handleResizeMouseDown}
+                                    className="text-gray-400 hover:text-gray-600 transition-colors cursor-se-resize"
+                                    title="Resize"
+                                >
+                                    <MoveDiagonal2 size={14} />
+                                </div>
+                            )}
+                            <h2 className="text-sm font-semibold text-gray-700 tracking-wide">
+                                პასუხების ფურცელი
+                            </h2>
+                            {isReadOnly && (
+                                <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                                    წაკითხვა
+                                </span>
+                            )}
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <span className="text-xs text-gray-400">
+                                {isReadOnly
+                                    ? `${readOnlyAnswers.filter(Boolean).length} / ${questions.length}`
+                                    : `${activeTab === "no-time" ? noTimeAnsweredCount : timedAnsweredCount} / ${questions.length}`
+                                }
+                            </span>
+                            <button
+                                onClick={() => setIsOpen(false)}
+                                onMouseDown={stopPropagation}
+                                className="text-gray-400 hover:text-red-400 transition-colors"
+                                aria-label="Close"
+                            >
+                                <X size={15} />
+                            </button>
+                        </div>
                     </div>
 
-                    {activeTab === "no-time" && (
-                        <div className="overflow-auto max-h-[70vh]">
-                            <table className="w-full text-sm sm:text-base table-fixed border">
-                                <thead>
-                                    <tr>
-                                        <th className="border px-1 py-1 w-8 sm:w-10">#</th>
-                                        {["ა", "ბ", "გ", "დ"].map((choice) => (
-                                            <th key={choice} className="border px-1 py-1">{choice}</th>
-                                        ))}
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {questions.map((_, i) => (
-                                        <tr key={i}>
-                                            <td className="border text-center">{i + 1}</td>
-                                            {["ა", "ბ", "გ", "დ"].map((choice) => (
-                                                <td key={choice} className="border text-center">
-                                                    <input
-                                                        type="radio"
-                                                        name={`noTime-${i}`}
-                                                        value={choice}
-                                                        checked={answersNoTime[i] === choice}
-                                                        onChange={() => handleNoTimeAnswer(i, choice)}
-                                                        className="mx-auto"
-                                                        onMouseDown={stopPropagation}
-                                                    />
-                                                </td>
-                                            ))}
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                            <div className="mt-4 text-right">
-                                <button
-                                    onClick={() => alert("Submit clicked (implement your logic)")}
-                                    className="border px-6 py-2 hover:bg-gray-100 rounded"
-                                    disabled={answerLoading}
-                                >
-                                    {answerLoading ? "Submitting..." : "Submit"}
-                                </button>
+                    {/* ── Read-only mode ────────────────────────────────────── */}
+                    {isReadOnly && (
+                        <>
+                            <div className="flex-1 overflow-auto p-4">
+                                {renderAnswerGrid(readOnlyAnswers, () => { })}
                             </div>
-                        </div>
+                            {renderReadOnlyFooter()}
+                        </>
                     )}
 
-                    {activeTab === "timed" && (
-                        <div className="flex flex-col gap-4">
-                            <div className="overflow-x-auto whitespace-nowrap border-b py-2">
-                                {questions.map((q, index) => {
-                                    const hasSelectedAnswer = "user_answer" in q && q.user_answer?.selected_answer;
-                                    return (
-                                        <button
-                                            key={q.id}
-                                            onClick={() => handleQuestionSwitch(index)}
-                                            className={`inline-block px-3 py-1 mx-1 bg-gray-300 rounded-sm transition-colors ${currentQuestionIndex === index ? "border-2" : "border-0"}`}
-                                            onMouseDown={stopPropagation}
-                                            title={hasSelectedAnswer ? `Answered: ${q.user_answer?.selected_answer?.toUpperCase()}` : "Not answered"}
-                                        >
-                                            {q.order}
-                                        </button>
-                                    );
-                                })}
-                                {allAnswered && (
-                                    <Link
-                                        to={`/quiz/result/${attempt?.id}`}
-                                        className="inline-block px-3 py-1 mx-1 rounded-sm transition-colors border-2"
-                                        onMouseDown={stopPropagation}
-                                    >
-                                        დასრულება
-                                    </Link>
-                                )}
+                    {/* ── No-Time Tab ──────────────────────────────────────── */}
+                    {!isReadOnly && activeTab === "no-time" && (
+                        <>
+                            <div className="flex-1 overflow-auto p-4">
+                                {renderAnswerGrid(answersNoTime, handleNoTimeAnswer)}
                             </div>
-
-                            <div className="text-center text-base font-semibold">
-                                კითხვა {currentQuestion?.order} / {questions.length}
-                                {isQuestionAnswered && (
-                                    <div className="mt-1">
-                                        <span className="text-main-color title">შესრულებულია</span>
-                                        {currentQuestion && "user_answer" in currentQuestion && currentQuestion.user_answer && (
-                                            <div className="text-sm text-gray-600 mt-1">
-                                                თქვენი პასუხი: <strong>{currentQuestion.user_answer.selected_answer.toUpperCase()}</strong>
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4 justify-center max-w-sm mx-auto">
-                                {["a", "b", "g", "d"].map((choice, index) => {
-                                    const georgianChoices = ["ა", "ბ", "გ", "დ"];
-                                    const selectedAnswer = currentQuestion?.user_answer?.selected_answer ?? answersTimed[currentQuestion?.order];
-                                    const isSelected = selectedAnswer === choice;
-                                    const isDisabled = isQuestionAnswered;
-
-                                    return (
-                                        <label
-                                            key={choice}
-                                            className={`flex items-center gap-2 border p-2 rounded cursor-pointer transition-colors
-                                                ${isSelected ? "bg-main-color/10 border-main-color" : "hover:bg-gray-50"}
-                                                ${isDisabled ? "cursor-not-allowed" : ""}`}
-                                            onMouseDown={stopPropagation}
-                                        >
-                                            <input
-                                                type="radio"
-                                                name="timedAnswer"
-                                                value={choice}
-                                                checked={isSelected}
-                                                onChange={() => !isDisabled && handleTimedAnswer(choice)}
-                                                disabled={isDisabled}
-                                            />
-                                            <span className={isSelected ? "text-main-color font-bold" : ""}>
-                                                {georgianChoices[index]}
-                                            </span>
-                                            {isSelected && isDisabled && (
-                                                <span className="ml-auto text-main-color">✓</span>
-                                            )}
-                                        </label>
-                                    );
-                                })}
-                            </div>
-
-                            <div className="flex justify-center gap-4 mt-4">
-                                <button
-                                    onClick={handleSkip}
-                                    className="border px-6 py-2 rounded hover:bg-gray-100 transition-colors"
-                                    type="button"
-                                    disabled={answerLoading || isQuestionAnswered}
-                                >
-                                    გამოტოვება
-                                </button>
-                                <button
-                                    onClick={handleTimedComplete}
-                                    className={`border px-6 py-2 rounded transition-colors ${isQuestionAnswered
-                                        ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                                        : "bg-blue-500 text-white hover:bg-blue-600"}`}
-                                    type="button"
-                                    disabled={answerLoading || isQuestionAnswered}
-                                >
-                                    {answerLoading ? "ატვირთვა..." : isQuestionAnswered ? "უკვე შესრულებულია" : "შესრულება"}
-                                </button>
-                            </div>
-                        </div>
+                            {renderFooter(
+                                noTimeAnsweredCount,
+                                questions.length,
+                                answersNoTime,
+                                () => handleSubmitAll(answersNoTime, "no-time")
+                            )}
+                        </>
                     )}
 
-                    <div
-                        data-resize-handle="true"
-                        onMouseDown={handleResizeMouseDown}
-                        className="w-8 h-8 bg-gray-100 flex items-center justify-center absolute top-1 left-1 cursor-se-resize rounded hover:bg-gray-200 transition-colors"
-                        title="Resize"
-                    >
-                        <MoveDiagonal2 size={16} />
-                    </div>
+                    {/* ── Timed Tab ────────────────────────────────────────── */}
+                    {!isReadOnly && activeTab === "timed" && (
+                        <>
+                            <div className="flex-1 overflow-auto p-4">
+                                {renderAnswerGrid(answersTimed, handleTimedAnswer, currentQuestionIndex)}
+                            </div>
+                            {renderFooter(
+                                timedAnsweredCount,
+                                questions.length,
+                                answersTimed,
+                                () => handleSubmitAll(answersTimed, "timed")
+                                // <div className="flex items-center gap-1.5">
+                                //     <button
+                                //         onClick={() => handleQuestionSwitch(currentQuestionIndex - 1)}
+                                //         disabled={currentQuestionIndex === 0}
+                                //         onMouseDown={stopPropagation}
+                                //         className="w-7 h-7 flex items-center justify-center rounded-md border border-gray-200 text-gray-500 text-xs font-semibold hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                                //     >
+                                //         ←
+                                //     </button>
+                                //     <span className="text-xs text-gray-400 tabular-nums w-10 text-center">
+                                //         {currentQuestionIndex + 1}/{questions.length}
+                                //     </span>
+                                //     <button
+                                //         onClick={() => handleQuestionSwitch(currentQuestionIndex + 1)}
+                                //         disabled={currentQuestionIndex === questions.length - 1}
+                                //         onMouseDown={stopPropagation}
+                                //         className="w-7 h-7 flex items-center justify-center rounded-md border border-gray-200 text-gray-500 text-xs font-semibold hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                                //     >
+                                //         →
+                                //     </button>
+                                // </div>
+                            )}
+                        </>
+                    )}
                 </div>
             }
         </>

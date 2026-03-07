@@ -1,25 +1,47 @@
 // SafeRouter.tsx
 import { useEffect } from "react";
-import Loader from "./reusables/Loader";
 import { Navigate, useParams } from "react-router-dom";
+import Loader from "./reusables/Loader";
 import { useStartAttemptStore } from "../stores/attemptStore";
 
 function SafeRouter({ children }: { children: React.ReactNode }) {
     const { attemptId } = useParams();
     const { success, loading, error, startAttempt } = useStartAttemptStore();
 
+    const timerKey = (id: string) => `attempt_timer_${id}`;
+
     useEffect(() => {
-        if (attemptId && !success && !loading && !error) {
-            startAttempt(attemptId);
+        if (!attemptId) return;
+        if (success || loading || error) return;
+
+        // Start attempt request
+        startAttempt(attemptId);
+
+        // Persist timer start if not already saved
+        const existingTimer = localStorage.getItem(timerKey(attemptId));
+
+        if (!existingTimer) {
+            localStorage.setItem(timerKey(attemptId), String(Date.now()));
         }
-    }, [attemptId, startAttempt, success, loading, error]);
 
-    // No attemptId on this route, just render normally
-    if (!attemptId) return <>{children}</>;
+    }, [attemptId, success, loading, error, startAttempt]);
 
-    if (loading) return <Loader />;
-    if (error) return <Navigate to="/" replace />;
-    if (success) return <>{children}</>;
+    // Route does not require attempt
+    if (!attemptId) {
+        return <>{children}</>;
+    }
+
+    if (loading) {
+        return <Loader />;
+    }
+
+    if (error) {
+        return <Navigate to="/" replace />;
+    }
+
+    if (success) {
+        return <>{children}</>;
+    }
 
     return <Loader />;
 }

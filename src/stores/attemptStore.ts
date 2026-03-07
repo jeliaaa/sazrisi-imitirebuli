@@ -14,6 +14,7 @@ interface StartAttemptState {
 
   startAttempt: (attemptId: string | number) => Promise<boolean>;
   fetchQuestions: (attemptId: string | number) => Promise<boolean>;
+  submitAttempt: (attemptId: string) => Promise<void>;
 }
 
 export const useStartAttemptStore = create<StartAttemptState>((set) => ({
@@ -83,4 +84,15 @@ export const useStartAttemptStore = create<StartAttemptState>((set) => ({
       set({ answerLoading: false });
     }
   },
+  submitAttempt: async (attemptId: string) => {
+    set({ answerLoading: true });
+
+    try {
+      await apiV3.post(`quiz/attempts/${attemptId}/complete/`);
+      set({ answerLoading: false });
+    } catch (error) {
+      console.error('Failed to fetch quizzes:', error);
+      set({ answerLoading: false });
+    }
+  }
 }));

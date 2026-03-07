@@ -48,7 +48,7 @@ const QuizProgress = () => {
                 <NoteCanvas onClose={() => setActiveModal(null)} />
             )}
 
-            <div className="fixed z-50 right-5 md:bottom-5 bottom-20 flex flex-col gap-y-3 justify-center items-center shadow-2xl">
+            <div className="fixed z-50 right-5 md:bottom-5 bottom-20 flex flex-col gap-y-3 justify-center items-center">
                 <div
                     title="answers"
                     onClick={() => setActiveModal("answers")}

@@ -4,7 +4,8 @@ export const PublicRoutes = {
 
 export const privateRoutes = {
   quiz: "/quiz",
-  quizProgress: "/quiz/progress"
+  quizProgress: "/quiz/progress",
+  test: "/test"
 };
 
 export const routes = {

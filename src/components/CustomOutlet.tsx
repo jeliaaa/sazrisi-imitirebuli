@@ -51,7 +51,7 @@ const CustomOutlet = () => {
 
   return (
     <div className="h-screen w-screen flex flex-col">
-      <header className="flex items-center justify-between p-4 bg-gray-800 text-white">
+      <header className="flex items-center h-[10dvh] justify-between p-4 bg-gray-800 text-white">
         <h1 className="text-xl font-bold">{time}</h1>
 
         <h1 className="text-xl font-bold">

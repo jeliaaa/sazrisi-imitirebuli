@@ -17,5 +17,10 @@ export const privateRoutes = [
         title: "QuizProgress",
         path: routes.quizProgress,
         component: QuizProgressPage,
-    }
+    },
+    {
+        title: "test",
+        path: routes.test,
+        component: QuizPage,
+    },
 ];

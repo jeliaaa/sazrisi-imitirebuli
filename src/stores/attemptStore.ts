@@ -16,7 +16,7 @@ interface StartAttemptState {
   startAttempt: (attemptId: string | number) => Promise<boolean>;
   fetchQuestions: (attemptId: string | number) => Promise<boolean>;
   submitAttempt: (attemptId: string) => Promise<void>;
-  clearAttempt: () => void;
+  // clearAttempt: () => void;
 }
 
 export const useStartAttemptStore = create<StartAttemptState>()(
@@ -99,7 +99,7 @@ export const useStartAttemptStore = create<StartAttemptState>()(
       set({ answerLoading: false });
     }
   },
-  clearAttempt: () => set({ attempt: null, questions: [], error: null, success: false }),
+  // clearAttempt: () => set({ attempt: null, questions: [], error: null, success: false }),
   }),
   {
     name: "attempt-storage",

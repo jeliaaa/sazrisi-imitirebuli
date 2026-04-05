@@ -75,7 +75,7 @@ const AnswerModal = ({ isOpen, setIsOpen, isTraining, attempt, questions }: Answ
     const [elapsedTimes, setElapsedTimes] = useState<Map<number, number>>(new Map());
     const [isSubmitting, setIsSubmitting] = useState(false);
 
-    const { answerLoading, answerQuestion, submitAttempt, clearAttempt } = useStartAttemptStore();
+    const { answerLoading, answerQuestion, submitAttempt } = useStartAttemptStore();
 
     const [position, setPosition] = useState({ x: 100, y: 100 });
     const [size, setSize] = useState({ width: 760, height: 540 });
@@ -335,7 +335,7 @@ const AnswerModal = ({ isOpen, setIsOpen, isTraining, attempt, questions }: Answ
                 </div>
 
                 <Link
-                    onClick={() => { localStorage.removeItem('attemptId'); clearAttempt(); }}
+                    onClick={() => { localStorage.removeItem('attemptId') }}
                     to={`/`}
                     onMouseDown={stopPropagation}
                     className="px-5 py-2 rounded-lg text-sm font-semibold bg-main-color text-white hover:bg-emerald-600 shadow-sm shadow-emerald-200 transition-all duration-150 active:scale-95"

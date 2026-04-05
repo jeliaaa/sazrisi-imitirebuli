@@ -211,11 +211,12 @@ const AnswerModal = ({ isOpen, setIsOpen, isTraining, attempt, questions }: Answ
             }
             clearAnswers(attempt.id);
             submitAttempt(attempt.code)
-            window.location.reload();
         } catch (err) {
             console.error("Submit failed:", err);
         } finally {
             setIsSubmitting(false);
+            window.location.reload();
+
         }
     }, [attempt, questions, elapsedTimes, answerQuestion, submitAttempt]);
 

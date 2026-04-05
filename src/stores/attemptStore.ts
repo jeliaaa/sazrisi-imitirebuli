@@ -103,6 +103,6 @@ export const useStartAttemptStore = create<StartAttemptState>()(
   }),
   {
     name: "attempt-storage",
-    partialize: (state) => ({ attempt: state.attempt, questions: state.questions }),
+    partialize: (state) => ({ attempt: state.attempt }),
   }
 ));

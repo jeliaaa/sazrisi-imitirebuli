@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import { apiV3 } from "../utils/axios";
 import { AxiosError } from "axios";
 import type { IAttempt, Question, SubmittedAnswer } from "../types/types";
@@ -15,9 +16,12 @@ interface StartAttemptState {
   startAttempt: (attemptId: string | number) => Promise<boolean>;
   fetchQuestions: (attemptId: string | number) => Promise<boolean>;
   submitAttempt: (attemptId: string) => Promise<void>;
+  clearAttempt: () => void;
 }
 
-export const useStartAttemptStore = create<StartAttemptState>((set) => ({
+export const useStartAttemptStore = create<StartAttemptState>()(
+  persist(
+  (set) => ({
   loading: false,
   error: null,
   success: false,
@@ -94,5 +98,11 @@ export const useStartAttemptStore = create<StartAttemptState>((set) => ({
       console.error('Failed to fetch quizzes:', error);
       set({ answerLoading: false });
     }
+  },
+  clearAttempt: () => set({ attempt: null, questions: [], error: null, success: false }),
+  }),
+  {
+    name: "attempt-storage",
+    partialize: (state) => ({ attempt: state.attempt, questions: state.questions }),
   }
-}));
+));
